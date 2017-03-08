@@ -1,5 +1,7 @@
 option (CMAKE_BUILD_TYPE "CMake build type, e.g. RelWithDebInfo, Release, or Debug." RelWithDebInfo)
 
+set (CMAKE_CXX_STANDARD 11)
+
 set (ZLIB_INCLUDE_OPTS "")
 set (ZLIB_LIBRARY_OPTS "")
 
