@@ -114,9 +114,6 @@ private:
                     case 'S':
                     case 'H':
                         current += bam_cigar_oplen(cigarElem);
-                        if (start == -1)
-                            start = current;
-                        end = start;
                     break;
 
                     // base in ref but not read
@@ -131,16 +128,14 @@ private:
                     case '=':
                     case 'X':
                         if (start == -1)
-                            start = 0;
+                            start = current;
                         current += bam_cigar_oplen(cigarElem);
                         end = current;
-
-                        length += bam_cigar_oplen(cigarElem);
                     break;
                 }
             }
 
-        return { length, numMismatches, numInsertions, numDeletions };
+        return ChunkStats(end - start, numMismatches, numInsertions, numDeletions);
     }
 
     int countMismatches(bam1_t * record) const
@@ -215,9 +210,6 @@ private:
                 case 'S':
                 case 'H':
                     current += bam_cigar_oplen(cigarElem);
-                    if (start == -1)
-                        start = current;
-                    end = start;
                 break;
 
                 // "using up" read bases
@@ -226,7 +218,7 @@ private:
                 case '=':
                 case 'X':
                     if (start == -1)
-                        start = 0;
+                        start = current;
                     current += bam_cigar_oplen(cigarElem);
                     end = current;
                 break;
@@ -291,7 +283,7 @@ void AlignmentProcessor::print(std::ostream & out) const
     std::vector<char> buffer(1000);
 
     for (auto const & p : readStats) {
-        snprintf(&buffer[0], 9999, "READ\t%s\t%d\t%d\t%6.2f\t%6.2f\t%6.2f\t%6.2f\n",
+        snprintf(&buffer[0], 9999, "READ\t%s\t%'d\t%'d\t%6.2f\t%6.2f\t%6.2f\t%6.2f\n",
                  p.first.c_str(), p.second.readLength, p.second.alignedLength(),
                  p.second.alignedPercentage(),
                  p.second.mmRate(), p.second.insRate(), p.second.delRate());
@@ -322,6 +314,8 @@ int main(int argc, char ** argv)
             snprintf(&buffer[0], 99, "%'d", rec->core.pos + 1);
             std::cerr << "currently at " << hdr->target_name[rec->core.tid] << ":" << &buffer[0] << "\n";
         }
+        if (no > 1000)
+            break;
 
         proc.registerAlignment(rec);
     }
