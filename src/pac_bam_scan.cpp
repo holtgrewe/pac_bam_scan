@@ -140,9 +140,14 @@ private:
 
     int countMismatches(bam1_t * record) const
     {
+        if (record->core.flag & BAM_FUNMAP)
+            return 0;
+
         int numMismatches = 0;
 
         uint8_t * md = bam_aux_get(record, "MD");
+        if (md == NULL)
+            return 0;
         if (md[0] != 'Z')
             throw std::runtime_error("Unexpected MD");
         else
@@ -283,7 +288,7 @@ void AlignmentProcessor::print(std::ostream & out) const
     std::vector<char> buffer(1000);
 
     for (auto const & p : readStats) {
-        snprintf(&buffer[0], 9999, "READ\t%s\t%'d\t%'d\t%6.2f\t%6.2f\t%6.2f\t%6.2f\n",
+        snprintf(&buffer[0], 9999, "READ\t%s\t%d\t%d\t%6.2f\t%6.2f\t%6.2f\t%6.2f\n",
                  p.first.c_str(), p.second.readLength, p.second.alignedLength(),
                  p.second.alignedPercentage(),
                  p.second.mmRate(), p.second.insRate(), p.second.delRate());
@@ -308,14 +313,12 @@ int main(int argc, char ** argv)
 
     for (uint64_t no = 0; sam_read1(samfile, hdr, rec) >= 0; ++no)
     {
-        if (no % 10000 == 0) {
+        if (no % 10000 == 0 && rec->core.tid >= 0) {
             setlocale(LC_NUMERIC, "");
             std::vector<char> buffer(100);
             snprintf(&buffer[0], 99, "%'d", rec->core.pos + 1);
             std::cerr << "currently at " << hdr->target_name[rec->core.tid] << ":" << &buffer[0] << "\n";
         }
-        if (no > 1000)
-            break;
 
         proc.registerAlignment(rec);
     }
