@@ -1,0 +1,378 @@
+---
+title: "First Glimpse at PacBio Alignments"
+author: "Manuel Holtgrewe <manuel.holtgrewe@bihealth.de>"
+date: "March 10, 2016"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+# Prelude
+
+Here, we are looking at PacBio Sequal data from four individuals:
+
+1. 13-1450
+2. 13-1451
+3. 13-1452 (child of 13-1450 and 13-1451)
+4. NA12878
+
+The individuals 1-3 are patients of Medical Genetics, Charite Universitaetsmedizin Berlin.
+This data was sequenced in the Timmerman sequencing core at MPIMG Dahlem.
+The individual 4 was sequenced by Pacific Biosciences themselves and the data was downloaded from DNANexus.
+
+Here, we are mostly interested in the properties of aligned and unaligned reads using different read mappers:
+
+- ngmlr -- NGM-LR
+- ngmlr_chained -- NGM-LR with chaining script postprocessing by PacBio
+- minialign -- Unpublished PacBio aligner from Github
+- bwa_mem_pacbio -- BWA-MEM with some adjusted parameters for nicer alignments
+
+```{r libraries}
+require(readr);
+require(tidyr);
+require(dplyr);
+require(ggplot2);
+require(scales);
+```
+
+
+```{r define values}
+# TODO: ignore non 1..22, X, Y alignments
+setwd("~/Development/medgen_pacbio/read_stats");
+
+MAPPERS = c("ngmlr", "ngmlr_chained", "minialign", "bwa_mem_pacbio");
+SAMPLES = c("13_1450", "13_1451", "13_1452", "NA12878");
+PATTERN = "%s.%s-N1-DNA1-WGS1.read_stats.txt";
+```
+
+We will look at the first (ordered by read name thus random) 100k reads from each file for performance reasons.
+
+```{r set head}
+HEAD = 100 * 1000;
+```
+
+```{r load data}
+# Load HEAD from all data sets into master_df -------------------------------
+
+master_df = data.frame();
+
+for (mapper in MAPPERS) {
+    for (sample in SAMPLES) {
+        data = read_tsv(sprintf(PATTERN, mapper, sample), n_max = HEAD);
+        data = data %>%
+            mutate(isAligned = ifelse(aliLength > 0, "aligned", "unaligned"));
+        data$isAligned = factor(data$isAligned, levels = c("unaligned", "aligned"));
+
+        data$mapper = mapper;
+        data$sample = sample;
+
+        master_df = rbind(master_df, data);
+    }
+}
+```
+
+```{r transmogrify data}
+master_df$mapper = factor(master_df$mapper, levels = MAPPERS);
+master_df$sample = factor(master_df$sample, levels = SAMPLES);
+
+data = master_df %>% select(mapper, sample, isAligned, readLength, aliLength, aliPerc, mmRate, insRateS, insRateL, delRate, aRate, cRate, gRate, tRate, nRate);
+
+data.aligned = data %>% filter(isAligned == "aligned");
+```
+
+# Percent of Aligned Reads
+
+We first look at percentage of aligned reads in the samples with different read mappers.
+
+Summary:
+
+- NGMLR aligns fewer reads than Minialign and BWA-MEM
+- or: Minialign and BWA-MEM more aggressive in aligning reads
+
+```{r plot percentage of aligned reads}
+# Plot percent of aligned reads ---------------------------------------------
+
+data.summary <- data %>%
+    group_by(sample, mapper, isAligned) %>%
+    summarise(count = n()) %>%
+    mutate(perc = count / sum(count));
+
+ggplot(data.summary, aes(x = sample, y = perc * 100, fill = isAligned)) +
+    facet_wrap(~ mapper) +
+    geom_bar(stat = "identity", width = 0.7) +
+    theme_minimal(base_size = 14) +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    labs(
+        title = sprintf("Alignment status of %d k sampled reads", HEAD / 1000),
+        y = "reads [%]"
+    );
+```
+
+# Read Length Distribution
+
+Next, we look at the overall read length distribution.
+
+Summary:
+
+- Read length distribution is very similar for all samples
+
+```{r read length distribution}
+ggplot(data %>% filter(mapper == MAPPERS[[1]]), aes(x = readLength)) +
+         facet_wrap(~ sample) +
+         geom_histogram(bins = 100) +
+         theme(plot.title = element_text(hjust = 0.5)) +
+         labs(
+             title = sprintf("Read length distribution in %d k sampled reads", HEAD / 1000)
+         );
+```
+
+# Within-Read Alignability
+
+Next, look at the percentage of how much of a read was aligned by the different read mappers in the different samples.
+
+Summary:
+
+- NGM-LR and BWA-MEM align larger portions of the reads than Minialign
+- It is unclear which alignments are "better"
+
+```{r how much of a read aligned}
+# Plot percent of aligned ---------------------------------------------------
+
+ggplot(data.aligned, aes(x = sample, y = aliPerc)) +
+    facet_wrap(~ mapper) +
+    geom_violin() +
+    theme_minimal(base_size = 14) +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    labs(
+        title = sprintf("Distribution of aligned reads portion of %d k sampled reads", HEAD / 1000)
+    );
+```
+
+# Length distribution of aligned/unaligned reads
+
+Next, we look at the length distribution of aligned and unaligned reads in different read mappers for each sample.
+Note that there always if one plot showing the full distribution and then another showing the distribution for reads of length 0..4kbp.
+
+Summary:
+
+- NGM-LR aligns fewer reads around size ~1kbp than the other samples.
+- This is consistent with the MPIMPG and also the NA12878 data
+
+```{r plot aligned and unaligned reads}
+for (the.sample in SAMPLES) {
+    data.sample = data %>% filter(sample == the.sample);
+
+    plot(ggplot(data.sample, aes(x = readLength, colour = isAligned)) +
+             facet_wrap(~ mapper) +
+             geom_freqpoly(bins = 20, size = 2) +
+             theme(plot.title = element_text(hjust = 0.5)) +
+             labs(
+                 title = sprintf("Distribution of aligned vs. unaligned in %d k sampled reads of %s", HEAD / 1000, the.sample)
+             ));
+
+    plot(ggplot(data.sample, aes(x = readLength, colour = isAligned)) +
+             facet_wrap(~ mapper) +
+             geom_freqpoly(bins = 200, size = 2) +
+             coord_cartesian(xlim = c(0, 4000)) +
+             theme(plot.title = element_text(hjust = 0.5)) +
+             labs(
+                 title = sprintf("Distribution of aligned vs. unaligned in %d k sampled reads of %s [0..4kbp]", HEAD / 1000, the.sample)
+             ));
+}
+```
+
+# Nucleotide Distribution
+
+We then look at the nucleotide composition of the reads vs. their alignability.
+
+Summary:
+
+- NGM-LR fails to align more reads with medium G+C content for some reason
+
+```{r nucleotide distribution}
+# Plot nucleotide composition distribution of aligned vs unaligned -----
+
+for (the.sample in SAMPLES) {
+    data.sample = data %>% filter(sample == the.sample);
+
+    plot(ggplot(data.sample, aes(x = gRate+cRate, colour = isAligned)) +
+             facet_wrap(~ mapper) +
+             geom_freqpoly(bins = 20, size = 2) +
+             theme(plot.title = element_text(hjust = 0.5)) +
+             labs(
+                 title = sprintf("Distribution of G+C content of aligned vs. unaligned in %d k sampled reads of %s", HEAD / 1000, the.sample)
+             ));
+
+    plot(ggplot(data.sample, aes(x = nRate, colour = isAligned)) +
+             facet_wrap(~ mapper) +
+             geom_freqpoly(bins = 20, size = 2) +
+             theme(plot.title = element_text(hjust = 0.5)) +
+             labs(
+                 title = sprintf("Distribution of N content ofof aligned vs. unaligned in %d k sampled reads of %s", HEAD / 1000, the.sample)
+             ));
+}
+```
+
+# Read length vs. aligned
+
+We next consider the read length vs. aligned percentage for all reads and mappers
+
+Summary:
+
+- The read mappers behave similarly, except for Minialign which aligns fewer of long reads
+- NGMLR aligns more of even longer reads than the other tools.
+
+```{r plot read length vs aligned}
+# Plot read length vs. aligned percent ---------------------------------
+
+for (the.sample in SAMPLES) {
+    data.aligned.sample = data.aligned %>% filter(sample == the.sample);
+
+    print(
+        ggplot(data.aligned.sample, aes(x = readLength, y = aliPerc)) +
+            facet_wrap(~ mapper, scales = "free_y") +
+            geom_point() +
+            theme_minimal(base_size = 14) +
+            theme(plot.title = element_text(hjust = 0.5)) +
+            labs(
+                title = sprintf("Read length vs. aligned percentage for %s of %d k sampled reads", the.sample, HEAD / 1000)
+            )
+    );
+}
+```
+
+# Read Length vs. Error Rate
+
+For the different error types (and splitting insertions into those <10bp, >=10bp, and considering both), plot error rate vs. read length.
+Error rate is determined for all aligned chunks, then computed as number of errors in all chunks divided by the sum of chunk lengths.
+According to Gene Myers (and maybe others), there are nonsense-stretches (thanks for pointing this out to me Birte) in PacBio data.
+Thus, splitting small and large errors is useful.
+
+Shown is the error rate as in edit distance, i.e., an indel of length $n$ contributes $n$ errors.
+Indels are computed from the CIGAR string which is easy.
+Mismatches are computed from the MD tag but parsing that is a bit tricky so I might have made a mistake there.
+
+We first show the error rates as point plots and then also when binned into read length bins of size 2kbp.
+Note that I suppressed outliers so the median is easier to read.
+
+Summary:
+
+- Insertions are the dominant error type.
+- All mappers behave similarly.
+- Minialigner does not report an MD string and thus mismatches cannot be computed. 
+
+```{r read length vs error rate}
+# Plot read length vs. error rate -------------------------------------------
+
+for (sample in SAMPLES) {
+    data.aligned.sample = data.aligned %>% filter(sample == the.sample);
+
+    print(ggplot(data.aligned.sample, aes(x = readLength, y = insRateS)) +
+              facet_wrap(~ mapper, scales = "free_y") +
+              geom_point(size = .5) +
+              theme_minimal(base_size = 14) +
+              theme(plot.title = element_text(hjust = 0.5)) +
+              labs(
+                  title = sprintf("Error rate (insertions < 10bp) for %s and %d k sampled reads", the.sample, HEAD / 1000)
+              ));
+
+    print(ggplot(data.aligned.sample, aes(x = readLength, y = insRateL)) +
+              facet_wrap(~ mapper, scales = "free_y") +
+              geom_point(size = .5) +
+              theme_minimal(base_size = 14) +
+              theme(plot.title = element_text(hjust = 0.5)) +
+              labs(
+                  title = sprintf("Error rate (insertions >= 10bp) for %s and %d k sampled reads", the.sample, HEAD / 1000)
+              ));
+
+    print(ggplot(data.aligned.sample, aes(x = readLength, y = insRateS + insRateL)) +
+              facet_wrap(~ mapper, scales = "free_y") +
+              geom_point(size = .5) +
+              theme_minimal(base_size = 14) +
+              theme(plot.title = element_text(hjust = 0.5)) +
+              labs(
+                  title = sprintf("Error rate (ALL insertions) for %s and %d k sampled reads", the.sample, HEAD / 1000)
+              ));
+
+    print(ggplot(data.aligned.sample, aes(x = readLength, y = delRate)) +
+              facet_wrap(~ mapper) +
+              geom_point(size = .5) +
+              coord_cartesian(ylim = c(0, 100)) +
+              theme_minimal(base_size = 14) +
+              theme(plot.title = element_text(hjust = 0.5)) +
+              labs(
+                  title = sprintf("Error rate (deletions) for %s and %d k sampled reads", the.sample, HEAD / 1000)
+              ));
+
+    print(ggplot(data.aligned.sample, aes(x = readLength, y = mmRate)) +
+              facet_wrap(~ mapper, scales = "free_y") +
+              geom_point(size = .5) +
+              theme_minimal(base_size = 14) +
+              theme(plot.title = element_text(hjust = 0.5)) +
+              labs(
+                  title = sprintf("Error rate (mismatches) for %s and %d k sampled reads", the.sample, HEAD / 1000)
+              ));
+}
+```
+
+```{r plot binned read length vs error rate}
+# Plot binned read length vs. error rate -------------------------------------------
+
+data.aligned.binned = data %>% mutate(readLength = as.integer(floor(readLength / 4000) * 4));
+data.aligned.binned$readLength = as.factor(data.aligned.binned$readLength);
+
+for (the.sample in SAMPLES) {
+    data.aligned.binned.sample = data.aligned.binned %>% filter(sample == the.sample);
+
+    print(ggplot(data.aligned.binned.sample %>% filter(sample == the.sample), aes(x = readLength, y = insRateS)) +
+              facet_wrap(~ mapper, scales = "free_y") +
+              geom_boxplot(outlier.shape = NA) +
+              theme_minimal(base_size = 14) +
+              theme(plot.title = element_text(hjust = 0.5)) +
+              labs(
+                  title = sprintf("Error rate (insertions < 10bp) for %s and %d k sampled reads", the.sample, HEAD / 1000),
+                  x = "read length window [kbp]"
+              ));
+
+    print(ggplot(data.aligned.binned.sample %>% filter(sample == the.sample), aes(x = readLength, y = insRateL)) +
+              facet_wrap(~ mapper, scales = "free_y") +
+              geom_boxplot(outlier.shape = NA) +
+              theme_minimal(base_size = 14) +
+              theme(plot.title = element_text(hjust = 0.5)) +
+              labs(
+                  title = sprintf("Error rate (insertions >= 10bp) for %s and %d k sampled reads", the.sample, HEAD / 1000),
+                  x = "read length window [kbp]"
+              ));
+
+    print(ggplot(data.aligned.binned.sample %>% filter(sample == the.sample), aes(x = readLength, y = insRateS + insRateL)) +
+              facet_wrap(~ mapper, scales = "free_y") +
+              geom_boxplot(outlier.shape = NA) +
+              theme_minimal(base_size = 14) +
+              theme(plot.title = element_text(hjust = 0.5)) +
+              labs(
+                  title = sprintf("Error rate (ALL insertions) for %s and %d k sampled reads", the.sample, HEAD / 1000),
+                  x = "read length window [kbp]"
+              ));
+
+    print(ggplot(data.aligned.binned.sample %>% filter(sample == the.sample), aes(x = readLength, y = delRate)) +
+              facet_wrap(~ mapper) +
+              geom_boxplot(outlier.shape = NA) +
+              coord_cartesian(ylim = c(0, 100)) +
+              theme_minimal(base_size = 14) +
+              theme(plot.title = element_text(hjust = 0.5)) +
+              labs(
+                  title = sprintf("Error rate (deletions) for %s and %d k sampled reads", the.sample, HEAD / 1000),
+                  x = "read length window [kbp]"
+              ));
+
+    print(ggplot(data.aligned.binned.sample %>% filter(sample == the.sample), aes(x = readLength, y = mmRate)) +
+              facet_wrap(~ mapper, scales = "free_y") +
+              geom_boxplot(outlier.shape = NA) +
+              theme_minimal(base_size = 14) +
+              theme(plot.title = element_text(hjust = 0.5)) +
+              labs(
+                  title = sprintf("Error rate (mismatches) for %s and %d k sampled reads", the.sample, HEAD / 1000),
+                  x = "read length window [kbp]"
+              ));
+}
+```
