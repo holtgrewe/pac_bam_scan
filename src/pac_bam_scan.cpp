@@ -8,19 +8,23 @@
 #include <sam.h>
 
 
+// Threshold for "small" insertions (cmp. PacBio nonsense stretches)
+const int THRESH_INS_L = 10;
+
 
 struct ChunkStats
 {
     ChunkStats() = default;
 
-    ChunkStats(int length, int num_mismatches, int num_insertions, int num_deletions) :
-        length(length), num_mismatches(num_mismatches), num_insertions(num_insertions),
+    ChunkStats(int length, int num_mismatches, int num_insertions_s, int num_insertions_l, int num_deletions) :
+        length(length), num_mismatches(num_mismatches), num_insertions_s(num_insertions_s), num_insertions_l(num_insertions_l),
         num_deletions(num_deletions)
     {}
 
     int length { 0 };
     int num_mismatches { 0 };
-    int num_insertions { 0 };
+    int num_insertions_s { 0 };
+    int num_insertions_l { 0 };
     int num_deletions { 0 };
 };
 
@@ -46,17 +50,21 @@ struct ReadAlignmentStats
         return ((double)mmSum) / lenSum * 100.0;
     }
 
-    double insRate() const {
+    std::pair<double, double> insRate() const {
         int lenSum = 0;
-        int insSum = 0;
+        int insSumS = 0;
+        int insSumL = 0;
         for (auto const & stats : chunkStats) {
             lenSum += stats.length;
-            insSum += stats.num_insertions;
+            insSumS += stats.num_insertions_s;
+            insSumL += stats.num_insertions_l;
         }
         if (lenSum == 0)
-            return 0;
+            return std::make_pair(0.0, 0.0);
 
-        return ((double)insSum) / lenSum * 100.0;
+        return std::make_pair(
+                ((double)insSumS) / lenSum * 100.0,
+                ((double)insSumL) / lenSum * 100.0);
     }
 
     double delRate() const {
@@ -83,7 +91,8 @@ struct ReadAlignmentStats
             int first = std::max(range.first, current);
             if (range.second > first)
                 sum += range.second - first;
-            current = range.second;
+            if (current < range.second)
+                current = range.second;
         }
         return sum;
     }
@@ -103,7 +112,8 @@ private:
         int numMismatches = countMismatches(record);
 
         int length = 0;
-        int numInsertions = 0;
+        int numInsertionsS = 0;
+        int numInsertionsL = 0;
         int numDeletions = 0;
 
         int start = -1;
@@ -129,7 +139,10 @@ private:
 
                     // "using up" read bases
                     case 'I':
-                        numInsertions += bam_cigar_oplen(cigarElem);
+                        if (bam_cigar_oplen(cigarElem) >= THRESH_INS_L)
+                            numInsertionsL += bam_cigar_oplen(cigarElem);
+                        else
+                            numInsertionsS += bam_cigar_oplen(cigarElem);
                     case 'M':
                     case '=':
                     case 'X':
@@ -141,7 +154,7 @@ private:
                 }
             }
 
-        return ChunkStats(end - start, numMismatches, numInsertions, numDeletions);
+        return ChunkStats(end - start, numMismatches, numInsertionsS, numInsertionsL, numDeletions);
     }
 
     int countMismatches(bam1_t * record) const
@@ -296,12 +309,13 @@ void AlignmentProcessor::print(std::ostream & out) const
 
     std::vector<char> buffer(1000);
 
-    out << "HREAD\tname\treadLength\taliLength\taliPerc\tmmRate\tinsRate\tdelRate\n";
+    out << "HREAD\tname\treadLength\taliLength\taliPerc\tmmRate\tinsRateS\tinsRateL\tdelRate\n";
     for (auto const & p : readStats) {
-        snprintf(&buffer[0], 9999, "READ\t%s\t%d\t%d\t%6.2f\t%6.2f\t%6.2f\t%6.2f\n",
+        std::pair<double, double> insRates(p.second.insRate());
+        snprintf(&buffer[0], 9999, "READ\t%s\t%d\t%d\t%6.2f\t%6.2f\t%6.2f\t%6.2f\t%6.f\n",
                  p.first.c_str(), p.second.readLength, p.second.alignedLength(),
                  p.second.alignedPercentage(),
-                 p.second.mmRate(), p.second.insRate(), p.second.delRate());
+                 p.second.mmRate(), insRates.first, insRates.second, p.second.delRate());
         out << &buffer[0];
     }
 }
