@@ -40,6 +40,8 @@ struct ReadAlignmentStats
             lenSum += stats.length;
             mmSum += stats.num_mismatches;
         }
+        if (lenSum == 0)
+            return 0;
 
         return ((double)mmSum) / lenSum * 100.0;
     }
@@ -51,6 +53,8 @@ struct ReadAlignmentStats
             lenSum += stats.length;
             insSum += stats.num_insertions;
         }
+        if (lenSum == 0)
+            return 0;
 
         return ((double)insSum) / lenSum * 100.0;
     }
@@ -62,6 +66,8 @@ struct ReadAlignmentStats
             lenSum += stats.length;
             delSum += stats.num_deletions;
         }
+        if (lenSum == 0)
+            return 0;
 
         return ((double)delSum) / lenSum * 100.0;
     }
@@ -240,6 +246,9 @@ void ReadAlignmentStats::registerAlignment(bam1_t * record)
     // Update read length
     readLength = std::max(readLength, record->core.l_qseq);
 
+    if (record->core.flag & BAM_FUNMAP)
+        return;
+
     // Get chunk length
     alignedRanges.push_back(alignedRange(record));
 
@@ -287,6 +296,7 @@ void AlignmentProcessor::print(std::ostream & out) const
 
     std::vector<char> buffer(1000);
 
+    out << "HREAD\tname\treadLength\taliLength\taliPerc\tmmRate\tinsRate\tdelRate\n";
     for (auto const & p : readStats) {
         snprintf(&buffer[0], 9999, "READ\t%s\t%d\t%d\t%6.2f\t%6.2f\t%6.2f\t%6.2f\n",
                  p.first.c_str(), p.second.readLength, p.second.alignedLength(),
@@ -313,11 +323,16 @@ int main(int argc, char ** argv)
 
     for (uint64_t no = 0; sam_read1(samfile, hdr, rec) >= 0; ++no)
     {
-        if (no % 10000 == 0 && rec->core.tid >= 0) {
-            setlocale(LC_NUMERIC, "");
-            std::vector<char> buffer(100);
-            snprintf(&buffer[0], 99, "%'d", rec->core.pos + 1);
-            std::cerr << "currently at " << hdr->target_name[rec->core.tid] << ":" << &buffer[0] << "\n";
+        // TODO: ignore non 1..22, X, Y alignment
+        if (no % 10000 == 0) {
+            if (rec->core.tid >= 0) {
+                setlocale(LC_NUMERIC, "");
+                std::vector<char> buffer(100);
+                snprintf(&buffer[0], 99, "%'d", rec->core.pos + 1);
+                std::cerr << "currently at " << hdr->target_name[rec->core.tid] << ":" << &buffer[0] << "\n";
+            } else {
+                std::cerr << "currently at unaligned read\n";
+            }
         }
 
         proc.registerAlignment(rec);
