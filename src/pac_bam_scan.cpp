@@ -32,10 +32,46 @@ struct ChunkStats
 struct ReadAlignmentStats
 {
     int readLength { 0 };
+    std::vector<int> nucCount { 0, 0, 0, 0, 0 };  // ACGTN
     std::vector<ChunkStats> chunkStats;
     std::vector<std::pair<int, int> > alignedRanges;
 
     void registerAlignment(bam1_t * record);
+
+    double aRate() const {
+        if (readLength == 0)
+            return 0;
+        else
+            return 100.0 * ((double)nucCount[0]) / readLength;
+    }
+
+    double cRate() const {
+        if (readLength == 0)
+            return 0;
+        else
+            return 100.0 * ((double)nucCount[1]) / readLength;
+    }
+
+    double gRate() const {
+        if (readLength == 0)
+            return 0;
+        else
+            return 100.0 * ((double)nucCount[2]) / readLength;
+    }
+
+    double tRate() const {
+        if (readLength == 0)
+            return 0;
+        else
+            return 100.0 * ((double)nucCount[3]) / readLength;
+    }
+
+    double nRate() const {
+        if (readLength == 0)
+            return 0;
+        else
+            return 100.0 * ((double)nucCount[4]) / readLength;
+    }
 
     double mmRate() const {
         int lenSum = 0;
@@ -251,11 +287,32 @@ private:
 
         return std::make_pair(start, end);
     }
+    
 };
 
 
 void ReadAlignmentStats::registerAlignment(bam1_t * record)
 {
+    if (readLength < record->core.l_qseq)
+    {
+        std::fill(nucCount.begin(), nucCount.end(), 0);
+
+        uint8_t * seq = bam_get_seq(record);
+        for (int i = 0; i < record->core.l_qseq; ++i)
+        {
+            if (bam_seqi(seq, i) == 1)
+                nucCount[0] += 1;
+            else if (bam_seqi(seq, i) == 2)
+                nucCount[1] += 1;
+            else if (bam_seqi(seq, i) == 4)
+                nucCount[2] += 1;
+            else if (bam_seqi(seq, i) == 8)
+                nucCount[3] += 1;
+            else if (bam_seqi(seq, i) == 15)
+                nucCount[4] += 1;
+        }
+    }
+
     // Update read length
     readLength = std::max(readLength, record->core.l_qseq);
 
@@ -309,13 +366,16 @@ void AlignmentProcessor::print(std::ostream & out) const
 
     std::vector<char> buffer(1000);
 
-    out << "HREAD\tname\treadLength\taliLength\taliPerc\tmmRate\tinsRateS\tinsRateL\tdelRate\n";
+    out << "HREAD\tname\treadLength\taliLength\taliPerc\tmmRate\tinsRateS\tinsRateL\tdelRate\t"
+        << "aRate\tcRate\tgRate\ttRate\tnRate\n";
     for (auto const & p : readStats) {
         std::pair<double, double> insRates(p.second.insRate());
-        snprintf(&buffer[0], 9999, "READ\t%s\t%d\t%d\t%6.2f\t%6.2f\t%6.2f\t%6.2f\t%6.f\n",
+        snprintf(&buffer[0], 9999, "READ\t%s\t%d\t%d\t%6.2f\t%6.2f\t%6.2f\t%6.2f\t%6.2f\t%6.2f\t%6.2f\t%6.2f\t%6.2f\t%6.2f\n",
                  p.first.c_str(), p.second.readLength, p.second.alignedLength(),
                  p.second.alignedPercentage(),
-                 p.second.mmRate(), insRates.first, insRates.second, p.second.delRate());
+                 p.second.mmRate(), insRates.first, insRates.second, p.second.delRate(),
+                 p.second.aRate(), p.second.cRate(), p.second.gRate(), p.second.tRate(),
+                 p.second.nRate());
         out << &buffer[0];
     }
 }
@@ -348,6 +408,9 @@ int main(int argc, char ** argv)
                 std::cerr << "currently at unaligned read\n";
             }
         }
+
+        // if (no > 100)
+        //     break;
 
         proc.registerAlignment(rec);
     }
