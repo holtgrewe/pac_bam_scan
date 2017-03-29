@@ -12,6 +12,7 @@ Hopefully, the following is in sync:
 $ git clone git@github.com:holtgrewe/pac_bam_scan.git
 $ cd pac_bam_scan
 $ git submodule init
+$ git submodule update
 
 # build
 $ pushd htslib && sed -i.bak -e 's~^prefix.*~prefix=./inst~' Makefile && make install && popd
